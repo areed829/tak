@@ -1,0 +1,13 @@
+stack_move_small:0.6
+move_east:0.5
+place_corner:0.3275795110000001
+place_edge:0.42600026299695987
+place_middle:0.5
+use_capstone:0.31855900000000004
+stack_move_large:0.7
+move_west:0.5
+move_north:0.5
+place_action:0.7
+place_center:0.41236020123081474
+move_action:0.3
+move_south:0.5
