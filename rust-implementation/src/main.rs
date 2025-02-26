@@ -1,17 +1,12 @@
+// Game structs and types - put these at the top of your main.rs file
 use rand::Rng;
 use std::fmt;
 use std::io;
 use std::thread;
 use std::time::Duration;
 
-#[derive(Clone, Copy, PartialEq)]
-enum PieceType {
-    Flat,
-    Standing,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Player {
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum Player {
     White,
     Black,
 }
@@ -25,70 +20,107 @@ impl fmt::Display for Player {
     }
 }
 
-#[derive(Clone, Copy)]
-struct Piece {
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum PieceType {
+    Flat,
+    Standing,
+}
+
+#[derive(Debug, Clone)]
+pub struct Piece {
     player: Player,
     piece_type: PieceType,
 }
 
-struct Stack(Vec<Piece>);
+impl Piece {
+    pub fn new(player: Player, piece_type: PieceType) -> Self {
+        Piece { player, piece_type }
+    }
+
+    pub fn is_flat(&self) -> bool {
+        self.piece_type == PieceType::Flat
+    }
+
+    pub fn is_standing(&self) -> bool {
+        self.piece_type == PieceType::Standing
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Stack {
+    pieces: Vec<Piece>,
+}
 
 impl Stack {
-    fn new() -> Self {
-        Stack(Vec::new())
+    pub fn new() -> Self {
+        Stack { pieces: Vec::new() }
     }
 
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
+    pub fn add_piece(&mut self, piece: Piece) {
+        self.pieces.push(piece);
     }
 
-    fn top_piece(&self) -> Option<&Piece> {
-        self.0.last()
+    pub fn height(&self) -> usize {
+        self.pieces.len()
     }
 
-    fn controller(&self) -> Option<Player> {
-        self.top_piece().map(|p| p.player)
+    pub fn is_empty(&self) -> bool {
+        self.pieces.is_empty()
     }
 
-    fn is_blocking(&self) -> bool {
-        if let Some(piece) = self.top_piece() {
-            piece.piece_type == PieceType::Standing
+    pub fn controller(&self) -> Option<Player> {
+        if let Some(piece) = self.pieces.last() {
+            Some(piece.player)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_blocking(&self) -> bool {
+        if let Some(piece) = self.pieces.last() {
+            piece.is_standing()
         } else {
             false
         }
     }
 
-    fn add_piece(&mut self, piece: Piece) {
-        self.0.push(piece);
+    pub fn top(&self) -> Option<&Piece> {
+        self.pieces.last()
     }
 
-    fn take_n(&mut self, n: usize) -> Vec<Piece> {
-        let stack_size = self.0.len();
-        if n >= stack_size {
-            let result = self.0.clone();
-            self.0.clear();
-            result
-        } else {
-            self.0.split_off(stack_size - n)
-        }
-    }
-
-    fn height(&self) -> usize {
-        self.0.len()
+    pub fn take_top(&mut self, count: usize) -> Vec<Piece> {
+        let start_idx = self.height().saturating_sub(count);
+        self.pieces.drain(start_idx..).collect()
     }
 }
 
-struct Board {
-    size: usize,
-    spaces: Vec<Vec<Stack>>,
-    white_pieces: usize,
-    black_pieces: usize,
-    white_caps: usize,
-    black_caps: usize,
+impl fmt::Display for Stack {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.is_empty() {
+            write!(f, ".")
+        } else {
+            let top = self.pieces.last().unwrap();
+            let symbol = match (top.player, top.piece_type) {
+                (Player::White, PieceType::Flat) => "W",
+                (Player::White, PieceType::Standing) => "C",
+                (Player::Black, PieceType::Flat) => "B",
+                (Player::Black, PieceType::Standing) => "c",
+            };
+            write!(f, "{}{}", symbol, self.height())
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Board {
+    pub size: usize,
+    pub spaces: Vec<Vec<Stack>>,
+    white_pieces: (usize, usize), // (flats, capstones)
+    black_pieces: (usize, usize),
 }
 
 impl Board {
-    fn new(size: usize) -> Self {
+    pub fn new(size: usize) -> Self {
         let mut spaces = Vec::with_capacity(size);
         for _ in 0..size {
             let mut row = Vec::with_capacity(size);
@@ -98,8 +130,8 @@ impl Board {
             spaces.push(row);
         }
 
-        // Calculate pieces based on board size
-        let (pieces, caps) = match size {
+        // Calculate the number of pieces based on board size
+        let (flats, caps) = match size {
             3 => (10, 0),
             4 => (15, 0),
             5 => (21, 1),
@@ -110,69 +142,55 @@ impl Board {
         Board {
             size,
             spaces,
-            white_pieces: pieces,
-            black_pieces: pieces,
-            white_caps: caps,
-            black_caps: caps,
+            white_pieces: (flats, caps),
+            black_pieces: (flats, caps),
         }
     }
 
-    fn place_piece(
+    pub fn place_piece(
         &mut self,
         row: usize,
         col: usize,
         player: Player,
         piece_type: PieceType,
     ) -> Result<(), &'static str> {
+        // Check if position is within bounds
         if row >= self.size || col >= self.size {
             return Err("Position out of bounds");
         }
 
+        // Check if space is empty
         if !self.spaces[row][col].is_empty() {
-            return Err("Space already occupied");
+            return Err("Space is already occupied");
         }
 
         // Check if player has enough pieces
-        match player {
-            Player::White => {
-                if piece_type == PieceType::Standing && self.white_caps == 0 {
-                    return Err("No more capstones available");
-                } else if piece_type == PieceType::Flat && self.white_pieces == 0 {
-                    return Err("No more flat stones available");
+        let pieces = match player {
+            Player::White => &mut self.white_pieces,
+            Player::Black => &mut self.black_pieces,
+        };
+
+        match piece_type {
+            PieceType::Flat => {
+                if pieces.0 == 0 {
+                    return Err("No flat stones remaining");
                 }
+                pieces.0 -= 1;
             }
-            Player::Black => {
-                if piece_type == PieceType::Standing && self.black_caps == 0 {
-                    return Err("No more capstones available");
-                } else if piece_type == PieceType::Flat && self.black_pieces == 0 {
-                    return Err("No more flat stones available");
+            PieceType::Standing => {
+                if pieces.1 == 0 {
+                    return Err("No capstones remaining");
                 }
+                pieces.1 -= 1;
             }
         }
 
-        // Decrement piece count
-        match player {
-            Player::White => {
-                if piece_type == PieceType::Standing {
-                    self.white_caps -= 1;
-                } else {
-                    self.white_pieces -= 1;
-                }
-            }
-            Player::Black => {
-                if piece_type == PieceType::Standing {
-                    self.black_caps -= 1;
-                } else {
-                    self.black_pieces -= 1;
-                }
-            }
-        }
-
-        self.spaces[row][col].add_piece(Piece { player, piece_type });
+        // Place the piece
+        self.spaces[row][col].add_piece(Piece::new(player, piece_type));
         Ok(())
     }
 
-    fn move_stack(
+    pub fn move_stack(
         &mut self,
         from_row: usize,
         from_col: usize,
@@ -181,6 +199,7 @@ impl Board {
         count: usize,
         direction: Direction,
     ) -> Result<(), &'static str> {
+        // Check if positions are within bounds
         if from_row >= self.size
             || from_col >= self.size
             || to_row >= self.size
@@ -189,143 +208,107 @@ impl Board {
             return Err("Position out of bounds");
         }
 
-        // Check if the source stack has pieces and who controls it
-        if self.spaces[from_row][from_col].is_empty() {
-            return Err("No stack to move");
+        // Check if stack at from position is valid
+        let from_stack = &self.spaces[from_row][from_col];
+        if from_stack.is_empty() {
+            return Err("Source stack is empty");
         }
 
-        let controller = self.spaces[from_row][from_col]
-            .controller()
-            .ok_or("Stack has no controller")?;
+        // Check if player controls the stack
+        let player = if let Some(player) = from_stack.controller() {
+            player
+        } else {
+            return Err("Stack has no controller");
+        };
 
-        // Validate move distance based on direction
-        match direction {
+        // Check count is valid
+        let stack_height = from_stack.height();
+        if count > stack_height || count > self.size {
+            return Err("Cannot move that many pieces");
+        }
+
+        // Check if move is in a straight line and adjacent
+        let (dr, dc) = match direction {
             Direction::North => {
-                if from_row <= to_row || from_row - to_row != 1 {
-                    return Err("Invalid move distance or direction");
+                if from_row <= 0 || to_row != from_row - 1 || to_col != from_col {
+                    return Err("Invalid movement - not in a straight line");
                 }
+                (-1, 0)
             }
             Direction::South => {
-                if from_row >= to_row || to_row - from_row != 1 {
-                    return Err("Invalid move distance or direction");
+                if from_row >= self.size - 1 || to_row != from_row + 1 || to_col != from_col {
+                    return Err("Invalid movement - not in a straight line");
                 }
+                (1, 0)
             }
             Direction::East => {
-                if from_col >= to_col || to_col - from_col != 1 {
-                    return Err("Invalid move distance or direction");
+                if from_col >= self.size - 1 || to_col != from_col + 1 || to_row != from_row {
+                    return Err("Invalid movement - not in a straight line");
                 }
+                (0, 1)
             }
             Direction::West => {
-                if from_col <= to_col || from_col - to_col != 1 {
-                    return Err("Invalid move distance or direction");
+                if from_col <= 0 || to_col != from_col - 1 || to_row != from_row {
+                    return Err("Invalid movement - not in a straight line");
+                }
+                (0, -1)
+            }
+        };
+
+        // Check if there's a standing stone or capstone in the path
+        let mut pieces_to_move = self.spaces[from_row][from_col].take_top(count);
+        let mut curr_row = to_row as isize;
+        let mut curr_col = to_col as isize;
+
+        // Place the pieces along the path
+        while !pieces_to_move.is_empty() {
+            if curr_row < 0
+                || curr_row >= self.size as isize
+                || curr_col < 0
+                || curr_col >= self.size as isize
+            {
+                // Return the pieces and error
+                for piece in pieces_to_move.drain(..).rev() {
+                    self.spaces[from_row][from_col].add_piece(piece);
+                }
+                return Err("Movement path out of bounds");
+            }
+
+            let curr_r = curr_row as usize;
+            let curr_c = curr_col as usize;
+
+            // Check if there's a blocking stone
+            if let Some(top) = self.spaces[curr_r][curr_c].top() {
+                if top.is_standing() {
+                    // Check if we can flatten a wall with a capstone
+                    if top.piece_type == PieceType::Flat
+                        && pieces_to_move.len() == 1
+                        && pieces_to_move[0].piece_type == PieceType::Standing
+                    {
+                        // Continue - capstone can flatten a wall
+                    } else {
+                        // Return the pieces and error
+                        for piece in pieces_to_move.drain(..).rev() {
+                            self.spaces[from_row][from_col].add_piece(piece);
+                        }
+                        return Err("Cannot move onto a standing stone or capstone");
+                    }
                 }
             }
-        }
 
-        // Check if target stack is blocked
-        if self.spaces[to_row][to_col].is_blocking() {
-            return Err("Cannot move onto a blocking piece");
-        }
+            // Place one piece on this space
+            let piece = pieces_to_move.remove(0);
+            self.spaces[curr_r][curr_c].add_piece(piece);
 
-        // Check if player has enough pieces to move
-        let source_height = self.spaces[from_row][from_col].height();
-        if count > source_height {
-            return Err("Not enough pieces in stack to move");
-        }
-
-        // Check if player controls this stack
-        if self.spaces[from_row][from_col].controller() != Some(controller) {
-            return Err("You don't control this stack");
-        }
-
-        // Check if player can move that many pieces
-        if count > self.size {
-            return Err("Cannot move more pieces than board size");
-        }
-
-        // Take pieces from source stack
-        let pieces_to_move = self.spaces[from_row][from_col].take_n(count);
-
-        // Add pieces to destination stack
-        for piece in pieces_to_move {
-            self.spaces[to_row][to_col].add_piece(piece);
+            // Move to next space
+            curr_row += dr;
+            curr_col += dc;
         }
 
         Ok(())
     }
 
-    fn check_road_win(&self, player: Player) -> bool {
-        // Check horizontal roads
-        for row in 0..self.size {
-            let mut connected = 0;
-            for col in 0..self.size {
-                if !self.spaces[row][col].is_empty()
-                    && !self.spaces[row][col].is_blocking()
-                    && self.spaces[row][col].controller() == Some(player)
-                {
-                    connected += 1;
-                    if connected == self.size {
-                        return true;
-                    }
-                } else {
-                    connected = 0;
-                }
-            }
-        }
-
-        // Check vertical roads
-        for col in 0..self.size {
-            let mut connected = 0;
-            for row in 0..self.size {
-                if !self.spaces[row][col].is_empty()
-                    && !self.spaces[row][col].is_blocking()
-                    && self.spaces[row][col].controller() == Some(player)
-                {
-                    connected += 1;
-                    if connected == self.size {
-                        return true;
-                    }
-                } else {
-                    connected = 0;
-                }
-            }
-        }
-
-        // Check diagonals (this is a simplified check)
-        let mut connected = 0;
-        for i in 0..self.size {
-            if !self.spaces[i][i].is_empty()
-                && !self.spaces[i][i].is_blocking()
-                && self.spaces[i][i].controller() == Some(player)
-            {
-                connected += 1;
-                if connected == self.size {
-                    return true;
-                }
-            } else {
-                connected = 0;
-            }
-        }
-
-        connected = 0;
-        for i in 0..self.size {
-            if !self.spaces[i][self.size - 1 - i].is_empty()
-                && !self.spaces[i][self.size - 1 - i].is_blocking()
-                && self.spaces[i][self.size - 1 - i].controller() == Some(player)
-            {
-                connected += 1;
-                if connected == self.size {
-                    return true;
-                }
-            } else {
-                connected = 0;
-            }
-        }
-
-        false
-    }
-
-    fn is_board_full(&self) -> bool {
+    pub fn is_board_full(&self) -> bool {
         for row in 0..self.size {
             for col in 0..self.size {
                 if self.spaces[row][col].is_empty() {
@@ -336,10 +319,96 @@ impl Board {
         true
     }
 
-    fn remaining_pieces(&self, player: Player) -> (usize, usize) {
+    pub fn check_road_win(&self, player: Player) -> bool {
+        // Check for a road win (connected path from one side to the other)
+        self.check_horizontal_road(player) || self.check_vertical_road(player)
+    }
+
+    fn check_horizontal_road(&self, player: Player) -> bool {
+        // Initialize visited array
+        let mut visited = vec![vec![false; self.size]; self.size];
+
+        // Check if any piece in the leftmost column can form a road to the rightmost column
+        for row in 0..self.size {
+            if let Some(stack_player) = self.spaces[row][0].controller() {
+                if stack_player == player && self.spaces[row][0].top().unwrap().is_flat() {
+                    if self.dfs_road(row, 0, player, &mut visited, true) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn check_vertical_road(&self, player: Player) -> bool {
+        // Initialize visited array
+        let mut visited = vec![vec![false; self.size]; self.size];
+
+        // Check if any piece in the top row can form a road to the bottom row
+        for col in 0..self.size {
+            if let Some(stack_player) = self.spaces[0][col].controller() {
+                if stack_player == player && self.spaces[0][col].top().unwrap().is_flat() {
+                    if self.dfs_road(0, col, player, &mut visited, false) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn dfs_road(
+        &self,
+        row: usize,
+        col: usize,
+        player: Player,
+        visited: &mut Vec<Vec<bool>>,
+        is_horizontal: bool,
+    ) -> bool {
+        // Mark current cell as visited
+        visited[row][col] = true;
+
+        // Check if we've reached the opposite edge
+        if (is_horizontal && col == self.size - 1) || (!is_horizontal && row == self.size - 1) {
+            return true;
+        }
+
+        // Directions: up, right, down, left
+        let directions = [(0, 1), (1, 0), (0, -1), (-1, 0)];
+
+        // Explore all directions
+        for (dr, dc) in directions.iter() {
+            let new_row = row as isize + dr;
+            let new_col = col as isize + dc;
+
+            if new_row >= 0
+                && new_row < self.size as isize
+                && new_col >= 0
+                && new_col < self.size as isize
+            {
+                let nr = new_row as usize;
+                let nc = new_col as usize;
+
+                if !visited[nr][nc]
+                    && !self.spaces[nr][nc].is_empty()
+                    && self.spaces[nr][nc].controller() == Some(player)
+                    && self.spaces[nr][nc].top().unwrap().is_flat()
+                {
+                    if self.dfs_road(nr, nc, player, visited, is_horizontal) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
+    pub fn remaining_pieces(&self, player: Player) -> (usize, usize) {
         match player {
-            Player::White => (self.white_pieces, self.white_caps),
-            Player::Black => (self.black_pieces, self.black_caps),
+            Player::White => self.white_pieces,
+            Player::Black => self.black_pieces,
         }
     }
 }
@@ -351,55 +420,43 @@ impl fmt::Display for Board {
             "  {}",
             (0..self.size)
                 .map(|i| format!(" {} ", i))
-                .collect::<Vec<_>>()
+                .collect::<Vec<String>>()
                 .join("")
         )?;
-
-        for row in 0..self.size {
-            write!(f, "{} ", row)?;
-            for col in 0..self.size {
-                let stack = &self.spaces[row][col];
-                if stack.is_empty() {
-                    write!(f, "[ ]")?;
-                } else {
-                    let top = stack.top_piece().unwrap();
-                    let symbol = match (top.player, top.piece_type) {
-                        (Player::White, PieceType::Flat) => "W",
-                        (Player::Black, PieceType::Flat) => "B",
-                        (Player::White, PieceType::Standing) => "WC",
-                        (Player::Black, PieceType::Standing) => "BC",
-                    };
-
-                    let height = stack.height();
-                    if height > 1 {
-                        write!(f, "[{}{}]", symbol, height)?;
-                    } else {
-                        write!(f, "[{}]", symbol)?;
-                    }
-                }
+        writeln!(f, "  {}", "-".repeat(self.size * 3 + 1))?;
+        for r in 0..self.size {
+            write!(f, "{} |", r)?;
+            for c in 0..self.size {
+                write!(f, " {} ", self.spaces[r][c])?;
             }
-            writeln!(f)?;
+            writeln!(f, "|")?;
         }
+        writeln!(f, "  {}", "-".repeat(self.size * 3 + 1))?;
 
-        // Display remaining pieces
-        let (white_pieces, white_caps) = self.remaining_pieces(Player::White);
-        let (black_pieces, black_caps) = self.remaining_pieces(Player::Black);
-
-        writeln!(f, "White: {} flat, {} capstone", white_pieces, white_caps)?;
-        writeln!(f, "Black: {} flat, {} capstone", black_pieces, black_caps)?;
-
-        Ok(())
+        // Print pieces remaining
+        writeln!(
+            f,
+            "White pieces: {} flat, {} capstone",
+            self.white_pieces.0, self.white_pieces.1
+        )?;
+        writeln!(
+            f,
+            "Black pieces: {} flat, {} capstone",
+            self.black_pieces.0, self.black_pieces.1
+        )
     }
 }
 
-enum Direction {
+#[derive(Debug, Copy, Clone)]
+pub enum Direction {
     North,
     South,
     East,
     West,
 }
 
-enum GameMove {
+#[derive(Debug, Clone)]
+pub enum GameMove {
     Place {
         row: usize,
         col: usize,
@@ -414,14 +471,15 @@ enum GameMove {
     },
 }
 
-struct Game {
-    board: Board,
-    current_player: Player,
-    turn_number: usize,
+#[derive(Debug)]
+pub struct Game {
+    pub board: Board,
+    pub current_player: Player,
+    pub turn_number: usize,
 }
 
 impl Game {
-    fn new(board_size: usize) -> Self {
+    pub fn new(board_size: usize) -> Self {
         Game {
             board: Board::new(board_size),
             current_player: Player::White,
@@ -429,7 +487,7 @@ impl Game {
         }
     }
 
-    fn make_move(&mut self, game_move: GameMove) -> Result<(), &'static str> {
+    pub fn make_move(&mut self, game_move: GameMove) -> Result<(), &'static str> {
         match game_move {
             GameMove::Place {
                 row,
@@ -462,30 +520,10 @@ impl Game {
             }
         }
 
-        // Check for win conditions
-        if self.board.check_road_win(self.current_player) {
-            println!("{} wins by creating a road!", self.current_player);
-            return Ok(());
-        }
-
-        if self.board.is_board_full() {
-            println!("Game over: Board is full!");
-            return Ok(());
-        }
-
-        // Switch player and increment turn
-        self.current_player = match self.current_player {
-            Player::White => Player::Black,
-            Player::Black => {
-                self.turn_number += 1;
-                Player::White
-            }
-        };
-
         Ok(())
     }
 
-    fn run(&mut self) {
+    pub fn run(&mut self) {
         println!("Welcome to Tak!");
         println!("Board size: {}", self.board.size);
 
@@ -499,7 +537,6 @@ impl Game {
             println!(
                 "Enter your move (place row col [flat|cap] or move from_row from_col to_row to_col count):"
             );
-
             let mut input = String::new();
             io::stdin()
                 .read_line(&mut input)
@@ -507,7 +544,7 @@ impl Game {
 
             let parts: Vec<&str> = input.trim().split_whitespace().collect();
 
-            if parts.len() == 0 {
+            if parts.is_empty() {
                 println!("Invalid input");
                 continue;
             }
@@ -561,13 +598,14 @@ impl Game {
                     break;
                 }
                 _ => {
-                    println!("Unknown command");
+                    println!("Unknown command. Valid commands are 'place', 'move', or 'quit'.");
                     continue;
                 }
             };
 
             if let Err(msg) = result {
                 println!("Error: {}", msg);
+                continue;
             }
 
             // Check for win after move
@@ -584,24 +622,22 @@ impl Game {
                 println!("Game over: Board is full!");
                 break;
             }
+
+            // Switch player
+            self.current_player = match self.current_player {
+                Player::White => Player::Black,
+                Player::Black => {
+                    self.turn_number += 1;
+                    Player::White
+                }
+            };
         }
     }
 
-    // Add a method to run Human vs AI game
-    fn run_human_vs_ai(&mut self, ai_player: Player, ai_difficulty: usize) {
+    pub fn run_human_vs_ai(&mut self, ai_player: Player, difficulty: usize) {
         println!("Welcome to Tak - Human vs AI!");
         println!("Board size: {}", self.board.size);
-        println!("AI difficulty: {}", ai_difficulty);
-        println!(
-            "You are playing as {}",
-            if ai_player == Player::White {
-                "Black"
-            } else {
-                "White"
-            }
-        );
-
-        let ai = AIPlayer::new(ai_player, ai_difficulty);
+        println!("AI difficulty: {}", difficulty);
 
         loop {
             println!(
@@ -615,10 +651,10 @@ impl Game {
                 println!("AI is thinking...");
                 thread::sleep(Duration::from_millis(1000)); // Simulate thinking
 
-                let ai_move = ai.choose_move(self);
+                let ai_move = self.ai_choose_move(difficulty);
 
                 // Display the AI's move
-                match &ai_move {
+                match ai_move {
                     GameMove::Place {
                         row,
                         col,
@@ -650,7 +686,6 @@ impl Game {
                 println!(
                     "Enter your move (place row col [flat|cap] or move from_row from_col to_row to_col count):"
                 );
-
                 let mut input = String::new();
                 io::stdin()
                     .read_line(&mut input)
@@ -720,24 +755,6 @@ impl Game {
 
             if let Err(msg) = result {
                 println!("Error: {}", msg);
-                if self.current_player == ai_player {
-                    // If AI made an invalid move, let it try a simple placement
-                    for row in 0..self.board.size {
-                        for col in 0..self.board.size {
-                            if self.board.spaces[row][col].is_empty() {
-                                let fallback_move = GameMove::Place {
-                                    row,
-                                    col,
-                                    piece_type: PieceType::Flat,
-                                };
-                                println!("AI attempts fallback move: place {} {} flat", row, col);
-                                if self.make_move(fallback_move).is_ok() {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
                 continue;
             }
 
@@ -755,18 +772,28 @@ impl Game {
                 println!("Game over: Board is full!");
                 break;
             }
+
+            // Switch player
+            self.current_player = match self.current_player {
+                Player::White => Player::Black,
+                Player::Black => {
+                    self.turn_number += 1;
+                    Player::White
+                }
+            };
         }
     }
 
-    // Add a method to run the game with AI players
-    fn run_ai_vs_ai(&mut self, white_difficulty: usize, black_difficulty: usize, delay_ms: u64) {
-        println!("Welcome to Tak AI vs AI!");
+    pub fn run_ai_vs_ai(
+        &mut self,
+        white_difficulty: usize,
+        black_difficulty: usize,
+        delay_ms: u64,
+    ) {
+        println!("Welcome to Tak - AI vs AI!");
         println!("Board size: {}", self.board.size);
         println!("White AI difficulty: {}", white_difficulty);
         println!("Black AI difficulty: {}", black_difficulty);
-
-        let white_ai = AIPlayer::new(Player::White, white_difficulty);
-        let black_ai = AIPlayer::new(Player::Black, black_difficulty);
 
         loop {
             println!(
@@ -776,16 +803,22 @@ impl Game {
             println!("{}", self.board);
 
             // Add delay for better visualization
-            thread::sleep(Duration::from_millis(delay_ms));
+            if delay_ms > 0 {
+                thread::sleep(Duration::from_millis(delay_ms));
+            }
 
-            let ai_move = if self.current_player == Player::White {
-                white_ai.choose_move(self)
-            } else {
-                black_ai.choose_move(self)
+            // Choose AI difficulty based on current player
+            let difficulty = match self.current_player {
+                Player::White => white_difficulty,
+                Player::Black => black_difficulty,
             };
 
+            // AI's turn
+            println!("AI is thinking...");
+            let ai_move = self.ai_choose_move(difficulty);
+
             // Display the AI's move
-            match &ai_move {
+            match ai_move {
                 GameMove::Place {
                     row,
                     col,
@@ -818,15 +851,31 @@ impl Game {
 
             if let Err(msg) = result {
                 println!("Error in AI move: {}", msg);
-                // If AI made an invalid move, let it try again with a placement
-                let fallback_move = GameMove::Place {
-                    row: 0,
-                    col: 0,
-                    piece_type: PieceType::Flat,
-                };
-                if let Err(fallback_msg) = self.make_move(fallback_move) {
-                    println!("AI fallback move also failed: {}", fallback_msg);
-                    // If even the fallback fails, just end the game
+
+                // Try a simple fallback move
+                let mut fallback_successful = false;
+                'outer: for row in 0..self.board.size {
+                    for col in 0..self.board.size {
+                        if self.board.spaces[row][col].is_empty() {
+                            let fallback_move = GameMove::Place {
+                                row,
+                                col,
+                                piece_type: PieceType::Flat,
+                            };
+                            println!(
+                                "{} AI attempts fallback move: place flat at ({},{})",
+                                self.current_player, row, col
+                            );
+                            if self.make_move(fallback_move).is_ok() {
+                                fallback_successful = true;
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+
+                if !fallback_successful {
+                    println!("AI could not find a valid move. Game over.");
                     break;
                 }
             }
@@ -846,86 +895,52 @@ impl Game {
                 break;
             }
 
-            // Check for excessive turns to prevent infinite games
-            if self.turn_number > 100 {
-                println!("Game terminated after 100 turns");
-                break;
-            }
-        }
-    }
-}
-
-struct AIPlayer {
-    player: Player,
-    difficulty: usize, // 1-3, with 3 being hardest
-}
-
-impl AIPlayer {
-    fn new(player: Player, difficulty: usize) -> Self {
-        AIPlayer {
-            player,
-            difficulty: difficulty.clamp(1, 3),
-        }
-    }
-
-    fn choose_move(&self, game: &Game) -> GameMove {
-        let mut rng = rand::thread_rng();
-
-        // Check if it's the opening move or second move
-        let opening_phase = game.turn_number <= 2;
-        let board_size = game.board.size;
-
-        // 80% chance to make a placement move (except in late game)
-        let board_fullness = self.calculate_board_fullness(&game.board);
-        let prefer_placement = rng.gen_bool(0.8) && board_fullness < 0.7;
-
-        if opening_phase || prefer_placement {
-            // Place a stone
-            let piece_type = if self.player == game.current_player
-                && rng.gen_bool(0.1)
-                && (game.board.remaining_pieces(self.player).1 > 0)
-                && !opening_phase
-            {
-                // 10% chance to place a capstone if available and not in opening
-                PieceType::Standing
-            } else {
-                PieceType::Flat
+            // Switch player
+            self.current_player = match self.current_player {
+                Player::White => Player::Black,
+                Player::Black => {
+                    self.turn_number += 1;
+                    Player::White
+                }
             };
+        }
+    }
 
-            // Try to find a good position based on difficulty
-            if self.difficulty >= 2 && rng.gen_bool(0.7) {
-                // Try to place near the center for better position
-                let center = board_size / 2;
-                let range = if board_size >= 5 { 2 } else { 1 };
+    fn ai_choose_move(&self, difficulty: usize) -> GameMove {
+        let mut rng = rand::thread_rng();
+        let board_size = self.board.size;
 
-                for _ in 0..5 {
-                    // Try 5 times to find a good spot
-                    // Ensure we don't go beyond board boundaries
-                    let min_row = if center > range { center - range } else { 0 };
-                    let max_row = (center + range).min(board_size - 1);
-                    let min_col = if center > range { center - range } else { 0 };
-                    let max_col = (center + range).min(board_size - 1);
+        // Basic AI logic
+        if difficulty == 1 {
+            // Easy - Just place random pieces or make random moves
+            let place_prob = if self.turn_number <= 2 { 1.0 } else { 0.7 };
 
-                    let row = rng.gen_range(min_row..=max_row);
-                    let col = rng.gen_range(min_col..=max_col);
-
-                    if game.board.spaces[row][col].is_empty() {
-                        return GameMove::Place {
-                            row,
-                            col,
-                            piece_type,
-                        };
+            if rng.gen_bool(place_prob) {
+                // Try to place a piece randomly
+                let mut empty_spaces = Vec::new();
+                for row in 0..board_size {
+                    for col in 0..board_size {
+                        if self.board.spaces[row][col].is_empty() {
+                            empty_spaces.push((row, col));
+                        }
                     }
                 }
-            }
 
-            // Just find any empty spot
-            for _ in 0..20 {
-                // Try 20 times to find a random empty spot
-                let row = rng.gen_range(0..board_size);
-                let col = rng.gen_range(0..board_size);
+                if !empty_spaces.is_empty() {
+                    let idx = rng.gen_range(0..empty_spaces.len());
+                    let (row, col) = empty_spaces[idx];
 
-                if game.board.spaces[row][col].is_empty() {
+                    // Decide piece type (small chance of capstone after first few turns)
+                    let use_capstone = rng.gen_bool(0.1)
+                        && self.turn_number > 4
+                        && self.board.remaining_pieces(self.current_player).1 > 0;
+
+                    let piece_type = if use_capstone {
+                        PieceType::Standing
+                    } else {
+                        PieceType::Flat
+                    };
+
                     return GameMove::Place {
                         row,
                         col,
@@ -934,186 +949,252 @@ impl AIPlayer {
                 }
             }
 
-            // Fallback: systematically search for an empty space
-            for row in 0..board_size {
-                for col in 0..board_size {
-                    if game.board.spaces[row][col].is_empty() {
-                        return GameMove::Place {
-                            row,
-                            col,
-                            piece_type,
-                        };
-                    }
-                }
-            }
-
-            // If we somehow still haven't found a place, return a random move
-            // This shouldn't happen unless board is full
-            return GameMove::Place {
-                row: rng.gen_range(0..board_size),
-                col: rng.gen_range(0..board_size),
-                piece_type,
-            };
-        } else {
-            // Move a stack
-            // Find a stack we control
+            // Try to move a stack
             let mut controlled_stacks = Vec::new();
-
             for row in 0..board_size {
                 for col in 0..board_size {
-                    if !game.board.spaces[row][col].is_empty()
-                        && game.board.spaces[row][col].controller() == Some(self.player)
+                    if !self.board.spaces[row][col].is_empty()
+                        && self.board.spaces[row][col].controller() == Some(self.current_player)
                     {
                         controlled_stacks.push((row, col));
                     }
                 }
             }
 
-            if controlled_stacks.is_empty() {
-                // No stacks to move, fall back to placement
-                let piece_type = PieceType::Flat;
-                for row in 0..board_size {
-                    for col in 0..board_size {
-                        if game.board.spaces[row][col].is_empty() {
-                            return GameMove::Place {
-                                row,
-                                col,
-                                piece_type,
-                            };
-                        }
-                    }
-                }
-            }
+            if !controlled_stacks.is_empty() {
+                let attempts = 5; // Try a few times to find a valid move
+                for _ in 0..attempts {
+                    let idx = rng.gen_range(0..controlled_stacks.len());
+                    let (from_row, from_col) = controlled_stacks[idx];
 
-            // Pick a random stack we control
-            if let Some(&(from_row, from_col)) = controlled_stacks.choose(&mut rng) {
-                let stack_height = game.board.spaces[from_row][from_col].height();
-                let count = if stack_height > 1 {
-                    rng.gen_range(1..=stack_height.min(board_size))
-                } else {
-                    1
-                };
+                    let height = self.board.spaces[from_row][from_col].height();
+                    let count = rng.gen_range(1..=height.min(board_size));
 
-                // Try to find a valid move
-                let possible_moves = [
-                    // Check north (row-1)
-                    if from_row > 0 {
-                        let to_row = from_row - 1;
-                        if !game.board.spaces[to_row][from_col].is_blocking() {
-                            Some((to_row, from_col, Direction::North))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    },
-                    // Check south (row+1)
-                    if from_row + 1 < board_size {
-                        let to_row = from_row + 1;
-                        if !game.board.spaces[to_row][from_col].is_blocking() {
-                            Some((to_row, from_col, Direction::South))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    },
-                    // Check east (col+1)
-                    if from_col + 1 < board_size {
-                        let to_col = from_col + 1;
-                        if !game.board.spaces[from_row][to_col].is_blocking() {
-                            Some((from_row, to_col, Direction::East))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    },
-                    // Check west (col-1)
-                    if from_col > 0 {
-                        let to_col = from_col - 1;
-                        if !game.board.spaces[from_row][to_col].is_blocking() {
-                            Some((from_row, to_col, Direction::West))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    },
-                ];
+                    // Pick a random direction
+                    let directions = [(0, 1), (1, 0), (0, -1), (-1, 0)]; // right, down, left, up
+                    let dir_idx = rng.gen_range(0..4);
+                    let (dr, dc) = directions[dir_idx];
 
-                let mut valid_moves = Vec::new();
+                    let to_row = (from_row as isize + dr) as usize;
+                    let to_col = (from_col as isize + dc) as usize;
 
-                for option in &possible_moves {
-                    if let Some((to_row, to_col, _)) = option {
-                        valid_moves.push((*to_row, *to_col));
-                    }
-                }
-
-                if let Some(&(to_row, to_col)) = valid_moves.choose(&mut rng) {
-                    return GameMove::Move {
-                        from_row,
-                        from_col,
-                        to_row,
-                        to_col,
-                        count,
-                    };
-                }
-            }
-
-            // If we can't move, place a stone
-            let piece_type = PieceType::Flat;
-            for row in 0..board_size {
-                for col in 0..board_size {
-                    if game.board.spaces[row][col].is_empty() {
-                        return GameMove::Place {
-                            row,
-                            col,
-                            piece_type,
+                    // Check if move is valid (in bounds)
+                    if to_row < board_size && to_col < board_size {
+                        return GameMove::Move {
+                            from_row,
+                            from_col,
+                            to_row,
+                            to_col,
+                            count,
                         };
                     }
                 }
             }
+        } else if difficulty >= 2 {
+            // Medium/Hard - More strategic play
 
-            // This should never happen unless the board is full
-            return GameMove::Place {
-                row: 0,
-                col: 0,
-                piece_type: PieceType::Flat,
-            };
-        }
-    }
+            // Early game: place in strategic positions
+            if self.turn_number <= 2 || rng.gen_bool(0.6) {
+                let center = board_size / 2;
 
-    fn calculate_board_fullness(&self, board: &Board) -> f64 {
-        let mut occupied = 0;
-        let total = board.size * board.size;
+                // Prioritize center and surrounding positions
+                let mut priority_spots = Vec::new();
+                for r in center.saturating_sub(1)..=center.saturating_add(1).min(board_size - 1) {
+                    for c in center.saturating_sub(1)..=center.saturating_add(1).min(board_size - 1)
+                    {
+                        if self.board.spaces[r][c].is_empty() {
+                            let priority = if r == center && c == center {
+                                3
+                            } else if r == center || c == center {
+                                2
+                            } else {
+                                1
+                            };
+                            for _ in 0..priority {
+                                priority_spots.push((r, c));
+                            }
+                        }
+                    }
+                }
 
-        for row in 0..board.size {
-            for col in 0..board.size {
-                if !board.spaces[row][col].is_empty() {
-                    occupied += 1;
+                // Also consider edge positions
+                let mut edge_spots = Vec::new();
+                for r in 0..board_size {
+                    for c in 0..board_size {
+                        if (r == 0 || r == board_size - 1 || c == 0 || c == board_size - 1)
+                            && self.board.spaces[r][c].is_empty()
+                        {
+                            edge_spots.push((r, c));
+                        }
+                    }
+                }
+
+                // Combine and pick a position
+                priority_spots.extend(edge_spots);
+
+                if !priority_spots.is_empty() {
+                    let idx = rng.gen_range(0..priority_spots.len());
+                    let (row, col) = priority_spots[idx];
+
+                    // Decide piece type
+                    let use_capstone = difficulty >= 3
+                        && rng.gen_bool(0.2)
+                        && self.turn_number > 4
+                        && self.board.remaining_pieces(self.current_player).1 > 0;
+
+                    let piece_type = if use_capstone {
+                        PieceType::Standing
+                    } else {
+                        PieceType::Flat
+                    };
+
+                    return GameMove::Place {
+                        row,
+                        col,
+                        piece_type,
+                    };
+                }
+
+                // If no strategic spots, try any empty spot
+                let mut empty_spots = Vec::new();
+                for row in 0..board_size {
+                    for col in 0..board_size {
+                        if self.board.spaces[row][col].is_empty() {
+                            empty_spots.push((row, col));
+                        }
+                    }
+                }
+
+                if !empty_spots.is_empty() {
+                    let idx = rng.gen_range(0..empty_spots.len());
+                    let (row, col) = empty_spots[idx];
+                    return GameMove::Place {
+                        row,
+                        col,
+                        piece_type: PieceType::Flat,
+                    };
+                }
+            }
+
+            // Try to make a strategic stack move
+
+            // First, find all of our controlled stacks
+            let mut controlled_stacks = Vec::new();
+            for row in 0..board_size {
+                for col in 0..board_size {
+                    if !self.board.spaces[row][col].is_empty()
+                        && self.board.spaces[row][col].controller() == Some(self.current_player)
+                    {
+                        // Higher score for taller stacks
+                        let height = self.board.spaces[row][col].height();
+                        for _ in 0..height {
+                            controlled_stacks.push((row, col));
+                        }
+                    }
+                }
+            }
+
+            if !controlled_stacks.is_empty() {
+                let attempts = 10; // Try several times to find a good move
+                for _ in 0..attempts {
+                    let idx = rng.gen_range(0..controlled_stacks.len());
+                    let (from_row, from_col) = controlled_stacks[idx];
+
+                    let height = self.board.spaces[from_row][from_col].height();
+                    let max_move = height.min(board_size);
+
+                    // Prefer moving just 1 piece for small stacks, more for large stacks
+                    let count = if max_move <= 2 || rng.gen_bool(0.6) {
+                        1
+                    } else {
+                        rng.gen_range(1..=max_move)
+                    };
+
+                    // Pick a direction, prioritize capturing opponent pieces or building a road
+                    let mut directions = Vec::new();
+
+                    // Check each direction (right, down, left, up)
+                    let possible_dirs = [(0, 1), (1, 0), (0, -1), (-1, 0)];
+
+                    for (dr, dc) in possible_dirs.iter() {
+                        let to_row = from_row as isize + dr;
+                        let to_col = from_col as isize + dc;
+
+                        if to_row >= 0
+                            && to_row < board_size as isize
+                            && to_col >= 0
+                            && to_col < board_size as isize
+                        {
+                            let tr = to_row as usize;
+                            let tc = to_col as usize;
+
+                            // If space is empty or we can overtake it, consider it
+                            if self.board.spaces[tr][tc].is_empty()
+                                || (self.board.spaces[tr][tc]
+                                    .top()
+                                    .map_or(false, |p| p.is_flat()))
+                            {
+                                // Score the move
+                                let mut score = 1;
+
+                                // Higher score for capturing opponent's piece
+                                if !self.board.spaces[tr][tc].is_empty()
+                                    && self.board.spaces[tr][tc].controller()
+                                        != Some(self.current_player)
+                                {
+                                    score += 2;
+                                }
+
+                                // Add this direction with its score
+                                for _ in 0..score {
+                                    directions.push((tr, tc));
+                                }
+                            }
+                        }
+                    }
+
+                    if !directions.is_empty() {
+                        let idx = rng.gen_range(0..directions.len());
+                        let (to_row, to_col) = directions[idx];
+
+                        return GameMove::Move {
+                            from_row,
+                            from_col,
+                            to_row,
+                            to_col,
+                            count,
+                        };
+                    }
                 }
             }
         }
 
-        occupied as f64 / total as f64
-    }
-}
+        // Final fallback - find any valid placement
+        for row in 0..board_size {
+            for col in 0..board_size {
+                if self.board.spaces[row][col].is_empty() {
+                    return GameMove::Place {
+                        row,
+                        col,
+                        piece_type: PieceType::Flat,
+                    };
+                }
+            }
+        }
 
-// Add a choose method for Vec
-trait Choose<T> {
-    fn choose(&self, rng: &mut rand::rngs::ThreadRng) -> Option<&T>;
-}
-
-impl<T> Choose<T> for Vec<T> {
-    fn choose(&self, rng: &mut rand::rngs::ThreadRng) -> Option<&T> {
-        if self.is_empty() {
-            None
-        } else {
-            Some(&self[rng.gen_range(0..self.len())])
+        // Ultimate fallback - should never reach here
+        GameMove::Place {
+            row: 0,
+            col: 0,
+            piece_type: PieceType::Flat,
         }
     }
 }
+
+// Now add the learning_ai module and main function
+
+mod learning_ai;
+use learning_ai::{SelfLearningAI, run_human_vs_learning_ai, run_human_vs_trained_ai, train_ai};
 
 fn main() {
     println!("Welcome to Tak Simulator!");
@@ -1121,10 +1202,12 @@ fn main() {
     println!("1. Human vs Human");
     println!("2. Human vs AI");
     println!("3. AI vs AI");
-    println!("Choose a mode (1, 2, or 3):");
+    println!("4. Train AI");
+    println!("5. Human vs Trained AI");
+    println!("Choose a mode (1-5):");
 
     let mut input = String::new();
-    io::stdin()
+    std::io::stdin()
         .read_line(&mut input)
         .expect("Failed to read line");
 
@@ -1132,7 +1215,7 @@ fn main() {
 
     println!("Enter board size (3-6):");
     input.clear();
-    io::stdin()
+    std::io::stdin()
         .read_line(&mut input)
         .expect("Failed to read line");
 
@@ -1144,14 +1227,15 @@ fn main() {
         size
     };
 
-    let mut game = Game::new(board_size);
-
     match mode {
-        1 => game.run(),
+        1 => {
+            let mut game = Game::new(board_size);
+            game.run();
+        }
         2 => {
             println!("Do you want to play as White or Black? (white/black):");
             input.clear();
-            io::stdin()
+            std::io::stdin()
                 .read_line(&mut input)
                 .expect("Failed to read line");
 
@@ -1167,39 +1251,172 @@ fn main() {
 
             println!("Enter AI difficulty (1-3):");
             input.clear();
-            io::stdin()
+            std::io::stdin()
                 .read_line(&mut input)
                 .expect("Failed to read line");
             let ai_difficulty = input.trim().parse::<usize>().unwrap_or(2);
 
+            let mut game = Game::new(board_size);
             game.run_human_vs_ai(ai_player, ai_difficulty);
         }
         3 => {
             println!("Enter White AI difficulty (1-3):");
             input.clear();
-            io::stdin()
+            std::io::stdin()
                 .read_line(&mut input)
                 .expect("Failed to read line");
             let white_difficulty = input.trim().parse::<usize>().unwrap_or(2);
 
             println!("Enter Black AI difficulty (1-3):");
             input.clear();
-            io::stdin()
+            std::io::stdin()
                 .read_line(&mut input)
                 .expect("Failed to read line");
             let black_difficulty = input.trim().parse::<usize>().unwrap_or(2);
 
             println!("Enter delay between moves in milliseconds (0-5000, 0 for no delay):");
             input.clear();
-            io::stdin()
+            std::io::stdin()
                 .read_line(&mut input)
                 .expect("Failed to read line");
             let delay = input.trim().parse::<u64>().unwrap_or(1000).min(5000);
 
+            let mut game = Game::new(board_size);
             game.run_ai_vs_ai(white_difficulty, black_difficulty, delay);
+        }
+        4 => {
+            // AI Training mode
+            println!("Enter number of training games:");
+            input.clear();
+            std::io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
+            let num_games = input.trim().parse::<usize>().unwrap_or(1000);
+
+            println!("Enter learning rate (0.01-0.5, recommended 0.1):");
+            input.clear();
+            std::io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
+            let learning_rate = input.trim().parse::<f64>().unwrap_or(0.1).clamp(0.01, 0.5);
+
+            println!("Enter maximum turns per game (10-200):");
+            input.clear();
+            std::io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
+            let max_turns = input.trim().parse::<usize>().unwrap_or(100).clamp(10, 200);
+
+            println!("Show verbose output? (y/n):");
+            input.clear();
+            std::io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
+            let verbose = input.trim().to_lowercase() == "y";
+
+            // Run training
+            let (white_ai, black_ai) = train_ai(
+                board_size,
+                num_games,
+                learning_rate,
+                learning_rate,
+                max_turns,
+                verbose,
+            );
+
+            // Ask to save the trained AIs
+            println!("\nDo you want to save the trained AIs? (y/n):");
+            input.clear();
+            std::io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
+
+            if input.trim().to_lowercase() == "y" {
+                println!("Enter filename for White AI (e.g. 'white_ai.weights'):");
+                input.clear();
+                std::io::stdin()
+                    .read_line(&mut input)
+                    .expect("Failed to read line");
+
+                let white_filename = input.trim();
+                if !white_filename.is_empty() {
+                    if let Err(e) = white_ai.save_weights(white_filename) {
+                        println!("Error saving White AI: {}", e);
+                    } else {
+                        println!("White AI saved to {}", white_filename);
+                    }
+                }
+
+                println!("Enter filename for Black AI (e.g. 'black_ai.weights'):");
+                input.clear();
+                std::io::stdin()
+                    .read_line(&mut input)
+                    .expect("Failed to read line");
+
+                let black_filename = input.trim();
+                if !black_filename.is_empty() {
+                    if let Err(e) = black_ai.save_weights(black_filename) {
+                        println!("Error saving Black AI: {}", e);
+                    } else {
+                        println!("Black AI saved to {}", black_filename);
+                    }
+                }
+            }
+
+            // Ask to play against the trained AI
+            println!("\nDo you want to play against the trained AI? (y/n):");
+            input.clear();
+            std::io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
+
+            if input.trim().to_lowercase() == "y" {
+                run_human_vs_trained_ai(board_size, white_ai, black_ai);
+            }
+        }
+        5 => {
+            // Human vs Trained AI
+            println!("Enter filename for AI weights (leave empty for default AI):");
+            let mut weights_input = String::new();
+            std::io::stdin()
+                .read_line(&mut weights_input)
+                .expect("Failed to read line");
+
+            let weights_file = weights_input.trim();
+
+            println!("Do you want to play as White or Black? (white/black):");
+            let mut player_input = String::new();
+            std::io::stdin()
+                .read_line(&mut player_input)
+                .expect("Failed to read line");
+
+            let human_player = match player_input.trim().to_lowercase().as_str() {
+                "black" => Player::Black,
+                _ => Player::White, // Default to White
+            };
+
+            // Create AI with loaded weights
+            let ai_player = match human_player {
+                Player::White => Player::Black,
+                Player::Black => Player::White,
+            };
+
+            let mut ai = SelfLearningAI::new(ai_player, 0.1);
+
+            if !weights_file.is_empty() {
+                match ai.load_weights(weights_file) {
+                    Ok(_) => println!("Successfully loaded AI weights from {}", weights_file),
+                    Err(e) => println!("Error loading weights: {}. Using default AI.", e),
+                }
+            } else {
+                println!("Using default AI settings");
+            }
+
+            run_human_vs_learning_ai(board_size, human_player, ai);
         }
         _ => {
             println!("Invalid mode, using Human vs Human");
+            let mut game = Game::new(board_size);
             game.run();
         }
     }
