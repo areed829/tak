@@ -586,6 +586,273 @@ impl Game {
             }
         }
     }
+
+    // Add a method to run Human vs AI game
+    fn run_human_vs_ai(&mut self, ai_player: Player, ai_difficulty: usize) {
+        println!("Welcome to Tak - Human vs AI!");
+        println!("Board size: {}", self.board.size);
+        println!("AI difficulty: {}", ai_difficulty);
+        println!(
+            "You are playing as {}",
+            if ai_player == Player::White {
+                "Black"
+            } else {
+                "White"
+            }
+        );
+
+        let ai = AIPlayer::new(ai_player, ai_difficulty);
+
+        loop {
+            println!(
+                "\nTurn {}: {}'s turn",
+                self.turn_number, self.current_player
+            );
+            println!("{}", self.board);
+
+            let result = if self.current_player == ai_player {
+                // AI's turn
+                println!("AI is thinking...");
+                thread::sleep(Duration::from_millis(1000)); // Simulate thinking
+
+                let ai_move = ai.choose_move(self);
+
+                // Display the AI's move
+                match &ai_move {
+                    GameMove::Place {
+                        row,
+                        col,
+                        piece_type,
+                    } => {
+                        let piece_name = match piece_type {
+                            PieceType::Flat => "flat stone",
+                            PieceType::Standing => "capstone",
+                        };
+                        println!("AI places a {} at row {}, column {}", piece_name, row, col);
+                    }
+                    GameMove::Move {
+                        from_row,
+                        from_col,
+                        to_row,
+                        to_col,
+                        count,
+                    } => {
+                        println!(
+                            "AI moves {} pieces from ({},{}) to ({},{})",
+                            count, from_row, from_col, to_row, to_col
+                        );
+                    }
+                }
+
+                self.make_move(ai_move)
+            } else {
+                // Human's turn
+                println!(
+                    "Enter your move (place row col [flat|cap] or move from_row from_col to_row to_col count):"
+                );
+
+                let mut input = String::new();
+                io::stdin()
+                    .read_line(&mut input)
+                    .expect("Failed to read line");
+
+                let parts: Vec<&str> = input.trim().split_whitespace().collect();
+
+                if parts.is_empty() {
+                    println!("Invalid input");
+                    continue;
+                }
+
+                match parts[0] {
+                    "place" => {
+                        if parts.len() != 4 {
+                            println!("Invalid place command format");
+                            continue;
+                        }
+
+                        let row = parts[1].parse::<usize>().unwrap_or(999);
+                        let col = parts[2].parse::<usize>().unwrap_or(999);
+                        let piece_type = match parts[3] {
+                            "flat" => PieceType::Flat,
+                            "cap" => PieceType::Standing,
+                            _ => {
+                                println!("Invalid piece type");
+                                continue;
+                            }
+                        };
+
+                        self.make_move(GameMove::Place {
+                            row,
+                            col,
+                            piece_type,
+                        })
+                    }
+                    "move" => {
+                        if parts.len() != 6 {
+                            println!("Invalid move command format");
+                            continue;
+                        }
+
+                        let from_row = parts[1].parse::<usize>().unwrap_or(999);
+                        let from_col = parts[2].parse::<usize>().unwrap_or(999);
+                        let to_row = parts[3].parse::<usize>().unwrap_or(999);
+                        let to_col = parts[4].parse::<usize>().unwrap_or(999);
+                        let count = parts[5].parse::<usize>().unwrap_or(0);
+
+                        self.make_move(GameMove::Move {
+                            from_row,
+                            from_col,
+                            to_row,
+                            to_col,
+                            count,
+                        })
+                    }
+                    "quit" => {
+                        println!("Thanks for playing!");
+                        break;
+                    }
+                    _ => {
+                        println!("Unknown command. Valid commands are 'place', 'move', or 'quit'.");
+                        continue;
+                    }
+                }
+            };
+
+            if let Err(msg) = result {
+                println!("Error: {}", msg);
+                if self.current_player == ai_player {
+                    // If AI made an invalid move, let it try a simple placement
+                    for row in 0..self.board.size {
+                        for col in 0..self.board.size {
+                            if self.board.spaces[row][col].is_empty() {
+                                let fallback_move = GameMove::Place {
+                                    row,
+                                    col,
+                                    piece_type: PieceType::Flat,
+                                };
+                                println!("AI attempts fallback move: place {} {} flat", row, col);
+                                if self.make_move(fallback_move).is_ok() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Check for win after move
+            if self.board.check_road_win(Player::White) {
+                println!("{}", self.board);
+                println!("White wins by creating a road!");
+                break;
+            } else if self.board.check_road_win(Player::Black) {
+                println!("{}", self.board);
+                println!("Black wins by creating a road!");
+                break;
+            } else if self.board.is_board_full() {
+                println!("{}", self.board);
+                println!("Game over: Board is full!");
+                break;
+            }
+        }
+    }
+
+    // Add a method to run the game with AI players
+    fn run_ai_vs_ai(&mut self, white_difficulty: usize, black_difficulty: usize, delay_ms: u64) {
+        println!("Welcome to Tak AI vs AI!");
+        println!("Board size: {}", self.board.size);
+        println!("White AI difficulty: {}", white_difficulty);
+        println!("Black AI difficulty: {}", black_difficulty);
+
+        let white_ai = AIPlayer::new(Player::White, white_difficulty);
+        let black_ai = AIPlayer::new(Player::Black, black_difficulty);
+
+        loop {
+            println!(
+                "\nTurn {}: {}'s turn",
+                self.turn_number, self.current_player
+            );
+            println!("{}", self.board);
+
+            // Add delay for better visualization
+            thread::sleep(Duration::from_millis(delay_ms));
+
+            let ai_move = if self.current_player == Player::White {
+                white_ai.choose_move(self)
+            } else {
+                black_ai.choose_move(self)
+            };
+
+            // Display the AI's move
+            match &ai_move {
+                GameMove::Place {
+                    row,
+                    col,
+                    piece_type,
+                } => {
+                    let piece_name = match piece_type {
+                        PieceType::Flat => "flat stone",
+                        PieceType::Standing => "capstone",
+                    };
+                    println!(
+                        "{} AI places a {} at row {}, column {}",
+                        self.current_player, piece_name, row, col
+                    );
+                }
+                GameMove::Move {
+                    from_row,
+                    from_col,
+                    to_row,
+                    to_col,
+                    count,
+                } => {
+                    println!(
+                        "{} AI moves {} pieces from ({},{}) to ({},{})",
+                        self.current_player, count, from_row, from_col, to_row, to_col
+                    );
+                }
+            }
+
+            let result = self.make_move(ai_move);
+
+            if let Err(msg) = result {
+                println!("Error in AI move: {}", msg);
+                // If AI made an invalid move, let it try again with a placement
+                let fallback_move = GameMove::Place {
+                    row: 0,
+                    col: 0,
+                    piece_type: PieceType::Flat,
+                };
+                if let Err(fallback_msg) = self.make_move(fallback_move) {
+                    println!("AI fallback move also failed: {}", fallback_msg);
+                    // If even the fallback fails, just end the game
+                    break;
+                }
+            }
+
+            // Check for win after move
+            if self.board.check_road_win(Player::White) {
+                println!("{}", self.board);
+                println!("White wins by creating a road!");
+                break;
+            } else if self.board.check_road_win(Player::Black) {
+                println!("{}", self.board);
+                println!("Black wins by creating a road!");
+                break;
+            } else if self.board.is_board_full() {
+                println!("{}", self.board);
+                println!("Game over: Board is full!");
+                break;
+            }
+
+            // Check for excessive turns to prevent infinite games
+            if self.turn_number > 100 {
+                println!("Game terminated after 100 turns");
+                break;
+            }
+        }
+    }
 }
 
 struct AIPlayer {
@@ -848,110 +1115,13 @@ impl<T> Choose<T> for Vec<T> {
     }
 }
 
-impl Game {
-    // Add a method to run the game with AI players
-    fn run_ai_vs_ai(&mut self, white_difficulty: usize, black_difficulty: usize, delay_ms: u64) {
-        println!("Welcome to Tak AI vs AI!");
-        println!("Board size: {}", self.board.size);
-        println!("White AI difficulty: {}", white_difficulty);
-        println!("Black AI difficulty: {}", black_difficulty);
-
-        let white_ai = AIPlayer::new(Player::White, white_difficulty);
-        let black_ai = AIPlayer::new(Player::Black, black_difficulty);
-
-        loop {
-            println!(
-                "\nTurn {}: {}'s turn",
-                self.turn_number, self.current_player
-            );
-            println!("{}", self.board);
-
-            // Add delay for better visualization
-            thread::sleep(Duration::from_millis(delay_ms));
-
-            let ai_move = if self.current_player == Player::White {
-                white_ai.choose_move(self)
-            } else {
-                black_ai.choose_move(self)
-            };
-
-            // Display the AI's move
-            match &ai_move {
-                GameMove::Place {
-                    row,
-                    col,
-                    piece_type,
-                } => {
-                    let piece_name = match piece_type {
-                        PieceType::Flat => "flat stone",
-                        PieceType::Standing => "capstone",
-                    };
-                    println!(
-                        "{} AI places a {} at row {}, column {}",
-                        self.current_player, piece_name, row, col
-                    );
-                }
-                GameMove::Move {
-                    from_row,
-                    from_col,
-                    to_row,
-                    to_col,
-                    count,
-                } => {
-                    println!(
-                        "{} AI moves {} pieces from ({},{}) to ({},{})",
-                        self.current_player, count, from_row, from_col, to_row, to_col
-                    );
-                }
-            }
-
-            let result = self.make_move(ai_move);
-
-            if let Err(msg) = result {
-                println!("Error in AI move: {}", msg);
-                // If AI made an invalid move, let it try again with a placement
-                let fallback_move = GameMove::Place {
-                    row: 0,
-                    col: 0,
-                    piece_type: PieceType::Flat,
-                };
-                if let Err(fallback_msg) = self.make_move(fallback_move) {
-                    println!("AI fallback move also failed: {}", fallback_msg);
-                    // If even the fallback fails, just end the game
-                    break;
-                }
-            }
-
-            // Check for win after move
-            if self.board.check_road_win(Player::White) {
-                println!("{}", self.board);
-                println!("White wins by creating a road!");
-                break;
-            } else if self.board.check_road_win(Player::Black) {
-                println!("{}", self.board);
-                println!("Black wins by creating a road!");
-                break;
-            } else if self.board.is_board_full() {
-                println!("{}", self.board);
-                println!("Game over: Board is full!");
-                break;
-            }
-
-            // Check for excessive turns to prevent infinite games
-            if self.turn_number > 100 {
-                println!("Game terminated after 100 turns");
-                break;
-            }
-        }
-    }
-}
-
 fn main() {
     println!("Welcome to Tak Simulator!");
     println!("Game modes:");
     println!("1. Human vs Human");
-    println!("2. AI vs AI");
-    println!("Choose a mode (1 or 2):");
+    println!("2. Human vs AI");
+    println!("3. AI vs AI");
+    println!("Choose a mode (1, 2, or 3):");
 
     let mut input = String::new();
     io::stdin()
@@ -979,6 +1149,32 @@ fn main() {
     match mode {
         1 => game.run(),
         2 => {
+            println!("Do you want to play as White or Black? (white/black):");
+            input.clear();
+            io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
+
+            let human_player = match input.trim().to_lowercase().as_str() {
+                "black" => Player::Black,
+                _ => Player::White, // Default to White
+            };
+
+            let ai_player = match human_player {
+                Player::White => Player::Black,
+                Player::Black => Player::White,
+            };
+
+            println!("Enter AI difficulty (1-3):");
+            input.clear();
+            io::stdin()
+                .read_line(&mut input)
+                .expect("Failed to read line");
+            let ai_difficulty = input.trim().parse::<usize>().unwrap_or(2);
+
+            game.run_human_vs_ai(ai_player, ai_difficulty);
+        }
+        3 => {
             println!("Enter White AI difficulty (1-3):");
             input.clear();
             io::stdin()
@@ -993,12 +1189,12 @@ fn main() {
                 .expect("Failed to read line");
             let black_difficulty = input.trim().parse::<usize>().unwrap_or(2);
 
-            println!("Enter delay between moves in milliseconds (recommend 500-2000):");
+            println!("Enter delay between moves in milliseconds (0-5000, 0 for no delay):");
             input.clear();
             io::stdin()
                 .read_line(&mut input)
                 .expect("Failed to read line");
-            let delay = input.trim().parse::<u64>().unwrap_or(1000);
+            let delay = input.trim().parse::<u64>().unwrap_or(1000).min(5000);
 
             game.run_ai_vs_ai(white_difficulty, black_difficulty, delay);
         }
